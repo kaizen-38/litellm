@@ -407,8 +407,7 @@ impl AnthropicBeta {
             | Self::Output128k20250219
             | Self::TokenEfficientTools20250219
             | Self::WebSearch20250305 => &[BetaProvider::BedrockConverse, BetaProvider::Bedrock],
-            Self::Compact20260904
-            | Self::MidConversationOutputConfig20260701
+            Self::MidConversationOutputConfig20260701
             | Self::MidConversationToolChanges20260701 => &[
                 BetaProvider::BedrockConverse,
                 BetaProvider::BedrockMantle,
