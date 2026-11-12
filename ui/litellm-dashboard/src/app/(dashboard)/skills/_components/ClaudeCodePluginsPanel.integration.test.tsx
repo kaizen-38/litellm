@@ -31,6 +31,8 @@ const published: SkillHubSkill = {
 
 const pending: SkillSubmission = {
   id: "submission-1",
+  revision: 0,
+  can_edit: false,
   skill_name: published.name,
   operation: "update",
   status: "pending_review",
@@ -87,6 +89,19 @@ const respondToWrite = (path: string, body: RequestInit["body"]) => {
       skill: approved ? catalog[0] : null,
     };
     return Response.json(result);
+  }
+  if (path === `/skill-hub/submissions/${pending.id}`) {
+    const metadata = typeof body === "string" ? JSON.parse(body) : {};
+    submissions = submissions.map((item) => ({
+      ...item,
+      revision: (item.revision ?? 0) + 1,
+      proposal: { ...item.proposal, ...metadata },
+    }));
+    return Response.json(submissions[0]);
+  }
+  if (path.endsWith("/withdraw")) {
+    submissions = submissions.map((item) => ({ ...item, status: "withdrawn", can_edit: false }));
+    return Response.json(submissions[0]);
   }
   if (directPublication) {
     catalog = [{ ...published, version: "3.0.0", description: "Admin-published instructions" }];
@@ -573,7 +588,7 @@ it("saves an admin rejection reason for the author and keeps the published metad
   expect(writes[0]).toMatchObject({
     path: `/skill-hub/submissions/${pending.id}/reject`,
     method: "PUT",
-    body: JSON.stringify({ reason: "Please include setup instructions" }),
+    body: JSON.stringify({ expected_revision: 0, reason: "Please include setup instructions" }),
   });
   fireEvent.click(screen.getByRole("tab", { name: "Published skills" }));
   await waitFor(() =>
@@ -791,4 +806,45 @@ it("applies tag and scan filters across the catalog and resets pagination when s
   await waitFor(() => expect(catalogRequests.at(-1)?.searchParams.get("query")).toBe("reviewer@example.test"));
   expect(catalogRequests.at(-1)?.searchParams.get("tag")).toBe("engineering");
   expect(catalogRequests.at(-1)?.searchParams.get("security_scan_passed")).toBe("true");
+});
+
+it("lets an owner edit the viewed proposal and withdraw it with its current revision", async () => {
+  submissions = [{ ...pending, can_edit: true, revision: 3 }];
+  renderWithProviders(<ClaudeCodePluginsPanel accessToken="member-token" userRole="Internal User" />, {
+    searchParams: "tab=submissions",
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "View details" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit submission" }));
+  fireEvent.change(await screen.findByLabelText("Description (Optional)"), {
+    target: { value: "Owner revised instructions" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save submission" }));
+  expect(await screen.findByRole("cell", { name: "Owner revised instructions" })).toBeInTheDocument();
+  expect(JSON.parse(String(writes[0].body))).toMatchObject({
+    expected_revision: 3,
+    description: "Owner revised instructions",
+  });
+  expect(catalog).toEqual([published]);
+  fireEvent.click(screen.getByRole("button", { name: "Withdraw submission" }));
+  expect(writes).toHaveLength(1);
+  fireEvent.click(await screen.findByRole("button", { name: "Confirm withdrawal" }));
+  expect(await screen.findByText("Withdrawn")).toBeInTheDocument();
+  expect(writes[1]).toMatchObject({
+    path: `/skill-hub/submissions/${pending.id}/withdraw`,
+    body: JSON.stringify({ expected_revision: 4 }),
+  });
+  fireEvent.click(screen.getByRole("button", { name: "View details" }));
+  expect(screen.queryByRole("button", { name: "Edit submission" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Withdraw submission" })).not.toBeInTheDocument();
+});
+
+it("keeps admin review separate from ownership and sends the displayed revision", async () => {
+  submissions = [{ ...pending, revision: 7, can_edit: false }];
+  renderSubmissions();
+  fireEvent.click(await screen.findByRole("button", { name: "Review" }));
+  expect(screen.queryByRole("button", { name: "Edit submission" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Withdraw submission" })).not.toBeInTheDocument();
+  fireEvent.click(await screen.findByRole("button", { name: "Approve and publish" }));
+  expect(await screen.findByText("Approved")).toBeInTheDocument();
+  expect(JSON.parse(String(writes[0].body))).toEqual({ expected_revision: 7 });
 });
